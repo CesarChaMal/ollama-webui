@@ -1,0 +1,42 @@
+--Node Ubuntu
+curl -fsSL https://deb.nodesource.com/setup_16.x | sudo -E bash -
+sudo apt-get install -y nodejs
+node -v
+npm -v
+
+git clone https://github.com/CesarChaMal/ollama-webui.git
+mv ollama-webui/* .
+
+cp -RPp example.env .env
+
+OLD_URL="http://localhost:11434"
+NEW_URL="https://009e-35-197-101-111.ngrok-free.app"
+
+NEW_URL="http://localhost:11434"
+OLD_URL="https://009e-35-197-101-111.ngrok-free.app"
+
+sed -i "s|${OLD_URL}|${NEW_URL}|g" .env
+cat .env
+
+npm install vite
+npm install
+npm run build
+
+pip install uvicorn
+
+pip install -r backend/requirements.txt -U
+./backend/start.sh
+
+docker ps -a
+docker rm -f $(docker ps -a |  grep ollama | awk '{print $1}')
+docker rm -f $(docker ps -a |  grep my-node-app | awk '{print $1}')
+
+docker compose up -d --build
+docker compose -f docker-compose.yaml -f docker-compose.gpu.yaml up -d --build
+docker compose -f docker-compose.yaml -f docker-compose.api.yaml up -d --build
+
+./run-compose.sh
+./run-compose.sh --enable-gpu
+./run-compose.sh --enable-gpu --build
+
+
