@@ -1,3 +1,6 @@
+import sys
+sys.path.append('/content/backend')
+
 import time
 
 from fastapi import FastAPI, Request
