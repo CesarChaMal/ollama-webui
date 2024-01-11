@@ -1,13 +1,13 @@
 import os
 from peewee import *
 
-# Get the directory of the current file (main.py)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# Construct the path to the database file
 DB_PATH = os.path.join(CURRENT_DIR, 'data', 'ollama.db')
 
-# Connect to the SqliteDatabase
+print("Current Directory:", CURRENT_DIR)
+print("Database Path:", DB_PATH)
+print("Database Exists:", os.path.exists(DB_PATH))
+
 DB = SqliteDatabase(DB_PATH)
 
 
