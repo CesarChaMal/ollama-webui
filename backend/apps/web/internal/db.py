@@ -11,6 +11,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR)))
 # This makes the path relative to the /content directory
 DB_PATH = os.path.join(BASE_DIR, 'data', 'ollama.db')
 
+# Check if the directory exists, if not, create it
+if not os.path.exists(os.path.dirname(DB_PATH)):
+    os.makedirs(os.path.dirname(DB_PATH))
+	
 print("Current Directory:", CURRENT_DIR)
 print("Base Directory:", BASE_DIR)
 print("Database Path:", DB_PATH)
