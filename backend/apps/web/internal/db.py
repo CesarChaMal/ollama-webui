@@ -5,7 +5,7 @@ from peewee import *
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Assuming the base directory is two levels up from the current directory
-BASE_DIR = os.path.dirname(os.path.dirname(CURRENT_DIR))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(CURRENT_DIR)))
 
 # Construct the path to the database file
 # This makes the path relative to the /content directory
