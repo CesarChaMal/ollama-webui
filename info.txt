@@ -4,6 +4,11 @@ sudo apt-get install -y nodejs
 node -v
 npm -v
 
+--Node NVM
+nvm install v16.20.2
+nvm use v16.20.2
+node -v  # Verify the Node.js version
+
 git clone https://github.com/CesarChaMal/ollama-webui.git
 mv ollama-webui/* .
 
@@ -18,14 +23,63 @@ OLD_URL="https://009e-35-197-101-111.ngrok-free.app"
 sed -i "s|${OLD_URL}|${NEW_URL}|g" .env
 cat .env
 
+
+------------------------------------------------------
+export OLLAMA_API_BASE_URL='http://localhost:11434/api'
+export OPENAI_API_BASE_URL='https://api.openai.com/v1' # Example URL
+export OPENAI_API_KEY='your_openai_api_key_here'
+export NGROK_AUTHTOKEN='your_ngrok_auth_token_here'
+
+
+---------------------------------
+#!/usr/bin/env bash
+
+# Export env vars
+export $(grep -v '^#' .env | xargs)
+
+./setenv.sh
+
+echo OLLAMA_API_BASE_URL
+echo OPENAI_API_BASE_URL
+echo OPENAI_API_KEY
+echo NGROK_AUTHTOKEN
+
+--------------------------------------------
+pip install python-dotenv
+from dotenv import load_dotenv
+
+load_dotenv()  # This loads the environment variables from .env
+
+# Now you can access the environment variables using os.environ
+import os
+
+ollama_api_base_url = os.environ.get("OLLAMA_API_BASE_URL")
+openai_api_base_url = os
+--------------------------------------------
+
+
 npm install vite
 npm install
 npm run build
 
 pip install uvicorn
+pip install --ignore-installed blinker
+pip install kaleido
+pip install openai
+pip install cohere
+pip install tiktoken
 
 pip install -r backend/requirements.txt -U
-./backend/start.sh
+#./backend/start.sh
+#uvicorn backend.main:app --reload --host 0.0.0.0 --port 8080 --forwarded-allow-ips '*'
+#python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8080 --forwarded-allow-ips '*'
+python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8080
+
+from uvicorn import run
+
+if __name__ == "__main__":
+    run("backend.main:app", host="0.0.0.0", port=8080, reload=True)
+
 
 docker ps -a
 docker rm -f $(docker ps -a |  grep ollama | awk '{print $1}')
