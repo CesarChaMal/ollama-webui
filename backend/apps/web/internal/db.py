@@ -1,15 +1,17 @@
 import os
 from peewee import *
 
-# Get the directory of the current file (db.py)
+# Get the absolute path of the directory where this script is located
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Go up two levels from the current directory to reach the base directory
+# Assuming the base directory is two levels up from the current directory
 BASE_DIR = os.path.dirname(os.path.dirname(CURRENT_DIR))
 
 # Construct the path to the database file
+# This makes the path relative to the /content directory
 DB_PATH = os.path.join(BASE_DIR, 'data', 'ollama.db')
 
+print("Current Directory:", CURRENT_DIR)
 print("Base Directory:", BASE_DIR)
 print("Database Path:", DB_PATH)
 print("Database Exists:", os.path.exists(DB_PATH))
