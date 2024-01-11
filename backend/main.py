@@ -61,4 +61,6 @@ app.mount("/openai/api", openai_app)
 app.mount("/rag/api/v1", rag_app)
 
 
-app.mount("/", SPAStaticFiles(directory="../build", html=True), name="spa-static-files")
+#app.mount("/", SPAStaticFiles(directory="../build", html=True), name="spa-static-files")
+app.mount("/", SPAStaticFiles(directory="/content/build", html=True), name="spa-static-files")
+
