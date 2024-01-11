@@ -26,10 +26,9 @@ cat .env
 
 ------------------------------------------------------
 export OLLAMA_API_BASE_URL='http://localhost:11434/api'
-export OPENAI_API_BASE_URL='https://api.openai.com/v1' # Example URL
-export OPENAI_API_KEY='your_openai_api_key_here'
-export NGROK_AUTHTOKEN='your_ngrok_auth_token_here'
-
+export OPENAI_API_BASE_URL='https://api.openai.com/v1'
+export OPENAI_API_KEY=''
+export NGROK_AUTHTOKEN=''
 
 ---------------------------------
 #!/usr/bin/env bash
@@ -54,7 +53,7 @@ load_dotenv()  # This loads the environment variables from .env
 import os
 
 ollama_api_base_url = os.environ.get("OLLAMA_API_BASE_URL")
-openai_api_base_url = os
+openai_api_base_url = os.environ.get("OPENAI_API_BASE_URL")
 --------------------------------------------
 
 
@@ -74,6 +73,8 @@ pip install -r backend/requirements.txt -U
 #uvicorn backend.main:app --reload --host 0.0.0.0 --port 8080 --forwarded-allow-ips '*'
 #python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8080 --forwarded-allow-ips '*'
 python -m uvicorn backend.main:app --reload --host 0.0.0.0 --port 8080
+
+
 
 from uvicorn import run
 
