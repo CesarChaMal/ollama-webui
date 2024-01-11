@@ -1,4 +1,5 @@
 import os
+from peewee import *
 
 # Get the directory of the current file (main.py)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))

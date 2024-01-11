@@ -1,5 +1,21 @@
+#import sys
+#sys.path.append('/content/backend')
+
+import os
 import sys
-sys.path.append('/content/backend')
+
+# Get the directory of the current script (main.py)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Get the base directory of the project (one level up from current_dir)
+base_dir = os.path.dirname(current_dir)
+
+# Construct the path to the backend directory
+backend_dir = os.path.join(base_dir, 'backend')
+
+# Append the dynamically constructed backend path to sys.path
+sys.path.append(backend_dir)
+
 
 import time
 
@@ -61,6 +77,20 @@ app.mount("/openai/api", openai_app)
 app.mount("/rag/api/v1", rag_app)
 
 
+import os
+
 #app.mount("/", SPAStaticFiles(directory="../build", html=True), name="spa-static-files")
-app.mount("/", SPAStaticFiles(directory="/content/build", html=True), name="spa-static-files")
+#app.mount("/", SPAStaticFiles(directory="/content/build", html=True), name="spa-static-files")
+
+# Get the directory of the current script (main.py)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Get the base directory of the project (one level up from current_dir)
+base_dir = os.path.dirname(current_dir)
+
+# Construct the path to the build directory
+build_dir = os.path.join(base_dir, 'build')
+
+# Use the dynamically constructed path in app.mount
+app.mount("/", SPAStaticFiles(directory=build_dir, html=True), name="spa-static-files")
 
