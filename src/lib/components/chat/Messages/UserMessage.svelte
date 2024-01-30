@@ -1,7 +1,10 @@
 <script lang="ts">
+	import dayjs from 'dayjs';
+
 	import { tick } from 'svelte';
 	import Name from './Name.svelte';
 	import ProfileImage from './ProfileImage.svelte';
+	import { modelfiles } from '$lib/stores';
 
 	export let user;
 	export let message;
@@ -42,11 +45,31 @@
 </script>
 
 <div class=" flex w-full">
-	<ProfileImage src={user?.profile_image_url ?? '/user.png'} />
+	<ProfileImage
+		src={message.user
+			? $modelfiles.find((modelfile) => modelfile.tagName === message.user)?.imageUrl ?? '/user.png'
+			: user?.profile_image_url ?? '/user.png'}
+	/>
 
 	<div class="w-full overflow-hidden">
 		<div class="user-message">
-			<Name>You</Name>
+			<Name>
+				{#if message.user}
+					{#if $modelfiles.map((modelfile) => modelfile.tagName).includes(message.user)}
+						{$modelfiles.find((modelfile) => modelfile.tagName === message.user)?.title}
+					{:else}
+						You <span class=" text-gray-500 text-sm font-medium">{message?.user ?? ''}</span>
+					{/if}
+				{:else}
+					You
+				{/if}
+
+				{#if message.timestamp}
+					<span class=" invisible group-hover:visible text-gray-400 text-xs font-medium">
+						{dayjs(message.timestamp * 1000).format('DD/MM/YYYY HH:MM')}
+					</span>
+				{/if}
+			</Name>
 		</div>
 
 		<div

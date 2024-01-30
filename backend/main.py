@@ -33,7 +33,7 @@ from apps.openai.main import app as openai_app
 from apps.web.main import app as webui_app
 from apps.rag.main import app as rag_app
 
-from config import ENV
+from config import ENV, FRONTEND_BUILD_DIR
 
 
 class SPAStaticFiles(StaticFiles):
@@ -81,12 +81,6 @@ import os
 
 #app.mount("/", SPAStaticFiles(directory="../build", html=True), name="spa-static-files")
 #app.mount("/", SPAStaticFiles(directory="/content/build", html=True), name="spa-static-files")
-
-# Get the directory of the current script (main.py)
-current_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Get the base directory of the project (one level up from current_dir)
-base_dir = os.path.dirname(current_dir)
 
 # Construct the path to the build directory
 build_dir = os.path.join(base_dir, 'build')

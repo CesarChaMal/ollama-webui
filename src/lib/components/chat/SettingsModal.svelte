@@ -1,11 +1,11 @@
 <script lang="ts">
 	import toast from 'svelte-french-toast';
+	import queue from 'async/queue';
 	import fileSaver from 'file-saver';
 	const { saveAs } = fileSaver;
 
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
-	import { config, models, settings, user, chats } from '$lib/stores';
-	import { splitStream, getGravatarURL } from '$lib/utils';
 
 	import {
 		getOllamaVersion,
@@ -16,14 +16,16 @@
 		createModel,
 		deleteModel
 	} from '$lib/apis/ollama';
+	import { updateUserPassword } from '$lib/apis/auths';
 	import { createNewChat, deleteAllChats, getAllChats, getChatList } from '$lib/apis/chats';
 	import { WEB_UI_VERSION, WEBUI_API_BASE_URL } from '$lib/constants';
 
+	import { config, models, voices, settings, user, chats } from '$lib/stores';
+	import { splitStream, getGravatarURL, getImportOrigin, convertOpenAIChats } from '$lib/utils';
+
 	import Advanced from './Settings/Advanced.svelte';
 	import Modal from '../common/Modal.svelte';
-	import { updateUserPassword } from '$lib/apis/auths';
-	import { goto } from '$app/navigation';
-	import Page from '../../../routes/(app)/+page.svelte';
+
 	import {
 		getOpenAIKey,
 		getOpenAIModels,
@@ -32,6 +34,10 @@
 		updateOpenAIUrl
 	} from '$lib/apis/openai';
 	import { resetVectorDB } from '$lib/apis/rag';
+	import { setDefaultPromptSuggestions } from '$lib/apis/configs';
+	import { getBackendConfig } from '$lib/apis';
+	import UpdatePassword from './Settings/Account/UpdatePassword.svelte';
+	import Account from './Settings/Account.svelte';
 
 	export let show = false;
 
@@ -71,8 +77,15 @@
 	};
 
 	// Models
-	let modelTransferring = false;
+	const MAX_PARALLEL_DOWNLOADS = 3;
+	const modelDownloadQueue = queue(
+		(task: { modelName: string }, cb) =>
+			pullModelHandlerProcessor({ modelName: task.modelName, callback: cb }),
+		MAX_PARALLEL_DOWNLOADS
+	);
+	let modelDownloadStatus: Record<string, any> = {};
 
+	let modelTransferring = false;
 	let modelTag = '';
 	let digest = '';
 	let pullProgress = null;
@@ -87,9 +100,11 @@
 	let deleteModelTag = '';
 
 	// External
-
 	let OPENAI_API_KEY = '';
 	let OPENAI_API_BASE_URL = '';
+
+	// Interface
+	let promptSuggestions = [];
 
 	// Addons
 	let titleAutoGenerate = true;
@@ -99,15 +114,59 @@
 	let gravatarEmail = '';
 	let titleAutoGenerateModel = '';
 
+	// Voice
+	let speakVoice = '';
+
 	// Chats
 	let saveChatHistory = true;
 	let importFiles;
 	let showDeleteConfirm = false;
 
+	// Auth
+	let authEnabled = false;
+	let authType = 'Basic';
+	let authContent = '';
+
+	// Account
+	let profileImageUrl = '';
+	let currentPassword = '';
+	let newPassword = '';
+	let newPasswordConfirm = '';
+
+	// About
+	let ollamaVersion = '';
+
+	$: if (importFiles) {
+		console.log(importFiles);
+
+		let reader = new FileReader();
+		reader.onload = (event) => {
+			let chats = JSON.parse(event.target.result);
+			console.log(chats);
+			if (getImportOrigin(chats) == 'openai') {
+				try {
+					chats = convertOpenAIChats(chats);
+				} catch (error) {
+					console.log('Unable to import chats:', error);
+				}
+			}
+			importChats(chats);
+		};
+
+		if (importFiles.length > 0) {
+			reader.readAsText(importFiles[0]);
+		}
+	}
+
 	const importChats = async (_chats) => {
 		for (const chat of _chats) {
 			console.log(chat);
-			await createNewChat(localStorage.token, chat);
+
+			if (chat.chat) {
+				await createNewChat(localStorage.token, chat.chat);
+			} else {
+				await createNewChat(localStorage.token, chat);
+			}
 		}
 
 		await chats.set(await getChatList(localStorage.token));
@@ -120,37 +179,11 @@
 		saveAs(blob, `chat-export-${Date.now()}.json`);
 	};
 
-	$: if (importFiles) {
-		console.log(importFiles);
-
-		let reader = new FileReader();
-		reader.onload = (event) => {
-			let chats = JSON.parse(event.target.result);
-			console.log(chats);
-			importChats(chats);
-		};
-
-		reader.readAsText(importFiles[0]);
-	}
-
 	const deleteChats = async () => {
 		await goto('/');
 		await deleteAllChats(localStorage.token);
 		await chats.set(await getChatList(localStorage.token));
 	};
-
-	// Auth
-	let authEnabled = false;
-	let authType = 'Basic';
-	let authContent = '';
-
-	// Account
-	let currentPassword = '';
-	let newPassword = '';
-	let newPasswordConfirm = '';
-
-	// About
-	let ollamaVersion = '';
 
 	const updateOllamaAPIUrlHandler = async () => {
 		API_BASE_URL = await updateOllamaAPIUrl(localStorage.token, API_BASE_URL);
@@ -167,6 +200,11 @@
 		OPENAI_API_KEY = await updateOpenAIKey(localStorage.token, OPENAI_API_KEY);
 
 		await models.set(await getModels());
+	};
+
+	const updateInterfaceHandler = async () => {
+		promptSuggestions = await setDefaultPromptSuggestions(localStorage.token, promptSuggestions);
+		await config.set(await getBackendConfig());
 	};
 
 	const toggleTheme = async () => {
@@ -247,10 +285,11 @@
 		saveSettings({ saveChatHistory: saveChatHistory });
 	};
 
-	const pullModelHandler = async () => {
-		modelTransferring = true;
-
-		const res = await pullModel(localStorage.token, modelTag);
+	const pullModelHandlerProcessor = async (opts: { modelName: string; callback: Function }) => {
+		const res = await pullModel(localStorage.token, opts.modelName).catch((error) => {
+			opts.callback({ success: false, error, modelName: opts.modelName });
+			return null;
+		});
 
 		if (res) {
 			const reader = res.body
@@ -259,92 +298,90 @@
 				.getReader();
 
 			while (true) {
-				const { value, done } = await reader.read();
-				if (done) break;
-
 				try {
+					const { value, done } = await reader.read();
+					if (done) break;
+
 					let lines = value.split('\n');
 
 					for (const line of lines) {
 						if (line !== '') {
-							console.log(line);
 							let data = JSON.parse(line);
-							console.log(data);
-
 							if (data.error) {
 								throw data.error;
 							}
-
 							if (data.detail) {
 								throw data.detail;
 							}
 							if (data.status) {
-								if (!data.digest) {
-									toast.success(data.status);
-
-									if (data.status === 'success') {
-										const notification = new Notification(`Ollama`, {
-											body: `Model '${modelTag}' has been successfully downloaded.`,
-											icon: '/favicon.png'
-										});
-									}
-								} else {
-									digest = data.digest;
+								if (data.digest) {
+									let downloadProgress = 0;
 									if (data.completed) {
-										pullProgress = Math.round((data.completed / data.total) * 1000) / 10;
+										downloadProgress = Math.round((data.completed / data.total) * 1000) / 10;
 									} else {
-										pullProgress = 100;
+										downloadProgress = 100;
 									}
+									modelDownloadStatus[opts.modelName] = {
+										pullProgress: downloadProgress,
+										digest: data.digest
+									};
+								} else {
+									toast.success(data.status);
 								}
 							}
 						}
 					}
 				} catch (error) {
 					console.log(error);
-					toast.error(error);
+					if (typeof error !== 'string') {
+						error = error.message;
+					}
+					opts.callback({ success: false, error, modelName: opts.modelName });
 				}
 			}
+			opts.callback({ success: true, modelName: opts.modelName });
 		}
+	};
+
+	const pullModelHandler = async () => {
+		const sanitizedModelTag = modelTag.trim();
+		if (modelDownloadStatus[sanitizedModelTag]) {
+			toast.error(`Model '${sanitizedModelTag}' is already in queue for downloading.`);
+			return;
+		}
+		if (Object.keys(modelDownloadStatus).length === 3) {
+			toast.error('Maximum of 3 models can be downloaded simultaneously. Please try again later.');
+			return;
+		}
+
+		modelTransferring = true;
+
+		modelDownloadQueue.push(
+			{ modelName: sanitizedModelTag },
+			async (data: { modelName: string; success: boolean; error?: Error }) => {
+				const { modelName } = data;
+				// Remove the downloaded model
+				delete modelDownloadStatus[modelName];
+
+				console.log(data);
+
+				if (!data.success) {
+					toast.error(data.error);
+				} else {
+					toast.success(`Model '${modelName}' has been successfully downloaded.`);
+
+					const notification = new Notification(`Ollama`, {
+						body: `Model '${modelName}' has been successfully downloaded.`,
+						icon: '/favicon.png'
+					});
+
+					models.set(await getModels());
+				}
+			}
+		);
 
 		modelTag = '';
 		modelTransferring = false;
-
-		models.set(await getModels());
-	};
-
-	const calculateSHA256 = async (file) => {
-		console.log(file);
-		// Create a FileReader to read the file asynchronously
-		const reader = new FileReader();
-
-		// Define a promise to handle the file reading
-		const readFile = new Promise((resolve, reject) => {
-			reader.onload = () => resolve(reader.result);
-			reader.onerror = reject;
-		});
-
-		// Read the file as an ArrayBuffer
-		reader.readAsArrayBuffer(file);
-
-		try {
-			// Wait for the FileReader to finish reading the file
-			const buffer = await readFile;
-
-			// Convert the ArrayBuffer to a Uint8Array
-			const uint8Array = new Uint8Array(buffer);
-
-			// Calculate the SHA-256 hash using Web Crypto API
-			const hashBuffer = await crypto.subtle.digest('SHA-256', uint8Array);
-
-			// Convert the hash to a hexadecimal string
-			const hashArray = Array.from(new Uint8Array(hashBuffer));
-			const hashHex = hashArray.map((byte) => byte.toString(16).padStart(2, '0')).join('');
-
-			return `sha256:${hashHex}`;
-		} catch (error) {
-			console.error('Error calculating SHA-256 hash:', error);
-			throw error;
-		}
 	};
 
 	const uploadModelHandler = async () => {
@@ -363,7 +400,6 @@
 			fileResponse = await fetch(`${WEBUI_API_BASE_URL}/utils/upload`, {
 				method: 'POST',
 				headers: {
-					...($settings.authHeader && { Authorization: $settings.authHeader }),
 					...($user && { Authorization: `Bearer ${localStorage.token}` })
 				},
 				body: formData
@@ -375,7 +411,6 @@
 			fileResponse = await fetch(`${WEBUI_API_BASE_URL}/utils/download?url=${modelFileUrl}`, {
 				method: 'GET',
 				headers: {
-					...($settings.authHeader && { Authorization: $settings.authHeader }),
 					...($user && { Authorization: `Bearer ${localStorage.token}` })
 				}
 			}).catch((error) => {
@@ -527,37 +562,13 @@
 		return models;
 	};
 
-	const updatePasswordHandler = async () => {
-		if (newPassword === newPasswordConfirm) {
-			const res = await updateUserPassword(localStorage.token, currentPassword, newPassword).catch(
-				(error) => {
-					toast.error(error);
-					return null;
-				}
-			);
-
-			if (res) {
-				toast.success('Successfully updated.');
-			}
-
-			currentPassword = '';
-			newPassword = '';
-			newPasswordConfirm = '';
-		} else {
-			toast.error(
-				`The passwords you entered don't quite match. Please double-check and try again.`
-			);
-			newPassword = '';
-			newPasswordConfirm = '';
-		}
-	};
-
 	onMount(async () => {
 		console.log('settings', $user.role === 'admin');
 		if ($user.role === 'admin') {
 			API_BASE_URL = await getOllamaAPIUrl(localStorage.token);
 			OPENAI_API_BASE_URL = await getOpenAIUrl(localStorage.token);
 			OPENAI_API_KEY = await getOpenAIKey(localStorage.token);
+			promptSuggestions = $config?.default_prompt_suggestions;
 		}
 
 		let settings = JSON.parse(localStorage.getItem('settings') ?? '{}');
@@ -583,14 +594,19 @@
 		responseAutoCopy = settings.responseAutoCopy ?? false;
 		titleAutoGenerateModel = settings.titleAutoGenerateModel ?? '';
 		gravatarEmail = settings.gravatarEmail ?? '';
+		speakVoice = settings.speakVoice ?? '';
+
+		const getVoicesLoop = setInterval(async () => {
+			const _voices = await speechSynthesis.getVoices();
+			await voices.set(_voices);
+
+			// do your loop
+			if (_voices.length > 0) {
+				clearInterval(getVoicesLoop);
+			}
+		}, 100);
 
 		saveChatHistory = settings.saveChatHistory ?? true;
-
-		authEnabled = settings.authHeader !== undefined ? true : false;
-		if (authEnabled) {
-			authType = settings.authHeader.split(' ')[0];
-			authContent = settings.authHeader.split(' ')[1];
-		}
 
 		ollamaVersion = await getOllamaVersion(localStorage.token).catch((error) => {
 			return '';
@@ -726,6 +742,32 @@
 						</div>
 						<div class=" self-center">External</div>
 					</button>
+
+					<button
+						class="px-2.5 py-2.5 min-w-fit rounded-lg flex-1 md:flex-none flex text-right transition {selectedTab ===
+						'interface'
+							? 'bg-gray-200 dark:bg-gray-700'
+							: ' hover:bg-gray-300 dark:hover:bg-gray-800'}"
+						on:click={() => {
+							selectedTab = 'interface';
+						}}
+					>
+						<div class=" self-center mr-2">
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								viewBox="0 0 16 16"
+								fill="currentColor"
+								class="w-4 h-4"
+							>
+								<path
+									fill-rule="evenodd"
+									d="M2 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4Zm10.5 5.707a.5.5 0 0 0-.146-.353l-1-1a.5.5 0 0 0-.708 0L9.354 9.646a.5.5 0 0 1-.708 0L6.354 7.354a.5.5 0 0 0-.708 0l-2 2a.5.5 0 0 0-.146.353V12a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5V9.707ZM12 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"
+									clip-rule="evenodd"
+								/>
+							</svg>
+						</div>
+						<div class=" self-center">Interface</div>
+					</button>
 				{/if}
 
 				<button
@@ -777,34 +819,6 @@
 					</div>
 					<div class=" self-center">Chats</div>
 				</button>
-
-				{#if !$config || ($config && !$config.auth)}
-					<button
-						class="px-2.5 py-2.5 min-w-fit rounded-lg flex-1 md:flex-none flex text-right transition {selectedTab ===
-						'auth'
-							? 'bg-gray-200 dark:bg-gray-700'
-							: ' hover:bg-gray-300 dark:hover:bg-gray-800'}"
-						on:click={() => {
-							selectedTab = 'auth';
-						}}
-					>
-						<div class=" self-center mr-2">
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								viewBox="0 0 24 24"
-								fill="currentColor"
-								class="w-4 h-4"
-							>
-								<path
-									fill-rule="evenodd"
-									d="M12.516 2.17a.75.75 0 00-1.032 0 11.209 11.209 0 01-7.877 3.08.75.75 0 00-.722.515A12.74 12.74 0 002.25 9.75c0 5.942 4.064 10.933 9.563 12.348a.749.749 0 00.374 0c5.499-1.415 9.563-6.406 9.563-12.348 0-1.39-.223-2.73-.635-3.985a.75.75 0 00-.722-.516l-.143.001c-2.996 0-5.717-1.17-7.734-3.08zm3.094 8.016a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z"
-									clip-rule="evenodd"
-								/>
-							</svg>
-						</div>
-						<div class=" self-center">Authentication</div>
-					</button>
-				{/if}
 
 				<button
 					class="px-2.5 py-2.5 min-w-fit rounded-lg flex-1 md:flex-none flex text-right transition {selectedTab ===
@@ -858,7 +872,7 @@
 					<div class=" self-center">About</div>
 				</button>
 			</div>
-			<div class="flex-1 md:min-h-[340px]">
+			<div class="flex-1 md:min-h-[380px]">
 				{#if selectedTab === 'general'}
 					<div class="flex flex-col space-y-3">
 						<div>
@@ -873,7 +887,7 @@
 										toggleTheme();
 									}}
 								>
-									
+
 								</button> -->
 
 								<div class="flex items-center relative">
@@ -1029,7 +1043,7 @@
 					</div>
 				{:else if selectedTab === 'advanced'}
 					<div class="flex flex-col h-full justify-between text-sm">
-						<div class=" space-y-3 pr-1.5 overflow-y-scroll max-h-72">
+						<div class=" space-y-3 pr-1.5 overflow-y-scroll max-h-80">
 							<div class=" text-sm font-medium">Parameters</div>
 
 							<Advanced bind:options />
@@ -1160,7 +1174,7 @@
 									</button>
 								</div>
 
-								<div class="mt-2 text-xs text-gray-400 dark:text-gray-500">
+								<div class="mt-2 mb-1 text-xs text-gray-400 dark:text-gray-500">
 									To access the available model names for downloading, <a
 										class=" text-gray-500 dark:text-gray-300 font-medium"
 										href="https://ollama.ai/library"
@@ -1168,23 +1182,29 @@
 									>
 								</div>
 
-								{#if pullProgress !== null}
-									<div class="mt-2">
-										<div class=" mb-2 text-xs">Pull Progress</div>
-										<div class="w-full rounded-full dark:bg-gray-800">
-											<div
-												class="dark:bg-gray-600 bg-gray-500 text-xs font-medium text-gray-100 text-center p-0.5 leading-none rounded-full"
-												style="width: {Math.max(15, pullProgress ?? 0)}%"
-											>
-												{pullProgress ?? 0}%
+								{#if Object.keys(modelDownloadStatus).length > 0}
+									{#each Object.keys(modelDownloadStatus) as model}
+										<div class="flex flex-col">
+											<div class="font-medium mb-1">{model}</div>
+											<div class="">
+												<div
+													class="dark:bg-gray-600 bg-gray-500 text-xs font-medium text-gray-100 text-center p-0.5 leading-none rounded-full"
+													style="width: {Math.max(
+														15,
+														modelDownloadStatus[model].pullProgress ?? 0
+													)}%"
+												>
+													{modelDownloadStatus[model].pullProgress ?? 0}%
+												</div>
+												<div class="mt-1 text-xs dark:text-gray-500" style="font-size: 0.5rem;">
+													{modelDownloadStatus[model].digest}
+												</div>
 											</div>
 										</div>
-										<div class="mt-1 text-xs dark:text-gray-500" style="font-size: 0.5rem;">
-											{digest}
-										</div>
-									</div>
+									{/each}
 								{/if}
 							</div>
+
 							<hr class=" dark:border-gray-700" />
 
 							<div>
@@ -1388,9 +1408,10 @@
 								{#if uploadProgress !== null}
 									<div class="mt-2">
 										<div class=" mb-2 text-xs">Upload Progress</div>
+
 										<div class="w-full rounded-full dark:bg-gray-800">
 											<div
-												class="dark:bg-gray-600 text-xs font-medium text-blue-100 text-center p-0.5 leading-none rounded-full"
+												class="dark:bg-gray-600 bg-gray-500 text-xs font-medium text-gray-100 text-center p-0.5 leading-none rounded-full"
 												style="width: {Math.max(15, uploadProgress ?? 0)}%"
 											>
 												{uploadProgress ?? 0}%
@@ -1466,10 +1487,110 @@
 							</button>
 						</div>
 					</form>
+				{:else if selectedTab === 'interface'}
+					<form
+						class="flex flex-col h-full justify-between space-y-3 text-sm"
+						on:submit|preventDefault={() => {
+							updateInterfaceHandler();
+							show = false;
+						}}
+					>
+						<div class=" space-y-3 pr-1.5 overflow-y-scroll max-h-80">
+							<div class="flex w-full justify-between mb-2">
+								<div class=" self-center text-sm font-semibold">Default Prompt Suggestions</div>
+
+								<button
+									class="p-1 px-3 text-xs flex rounded transition"
+									type="button"
+									on:click={() => {
+										if (promptSuggestions.length === 0 || promptSuggestions.at(-1).content !== '') {
+											promptSuggestions = [...promptSuggestions, { content: '', title: ['', ''] }];
+										}
+									}}
+								>
+									<svg
+										xmlns="http://www.w3.org/2000/svg"
+										viewBox="0 0 20 20"
+										fill="currentColor"
+										class="w-4 h-4"
+									>
+										<path
+											d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z"
+										/>
+									</svg>
+								</button>
+							</div>
+							<div class="flex flex-col space-y-1">
+								{#each promptSuggestions as prompt, promptIdx}
+									<div class=" flex border dark:border-gray-600 rounded-lg">
+										<div class="flex flex-col flex-1">
+											<div class="flex border-b dark:border-gray-600 w-full">
+												<input
+													class="px-3 py-1.5 text-xs w-full bg-transparent outline-none border-r dark:border-gray-600"
+													placeholder="Title (e.g. Tell me a fun fact)"
+													bind:value={prompt.title[0]}
+												/>
+
+												<input
+													class="px-3 py-1.5 text-xs w-full bg-transparent outline-none border-r dark:border-gray-600"
+													placeholder="Subtitle (e.g. about the Roman Empire)"
+													bind:value={prompt.title[1]}
+												/>
+											</div>
+
+											<input
+												class="px-3 py-1.5 text-xs w-full bg-transparent outline-none border-r dark:border-gray-600"
+												placeholder="Prompt (e.g. Tell me a fun fact about the Roman Empire)"
+												bind:value={prompt.content}
+											/>
+										</div>
+
+										<button
+											class="px-2"
+											type="button"
+											on:click={() => {
+												promptSuggestions.splice(promptIdx, 1);
+												promptSuggestions = promptSuggestions;
+											}}
+										>
+											<svg
+												xmlns="http://www.w3.org/2000/svg"
+												viewBox="0 0 20 20"
+												fill="currentColor"
+												class="w-4 h-4"
+											>
+												<path
+													d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"
+												/>
+											</svg>
+										</button>
+									</div>
+								{/each}
+							</div>
+
+							{#if promptSuggestions.length > 0}
+								<div class="text-xs text-left w-full mt-2">
+									Adjusting these settings will apply changes universally to all users.
+								</div>
+							{/if}
+						</div>
+
+						<div class="flex justify-end pt-3 text-sm font-medium">
+							<button
+								class=" px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-gray-100 transition rounded"
+								type="submit"
+							>
+								Save
+							</button>
+						</div>
+					</form>
 				{:else if selectedTab === 'addons'}
 					<form
 						class="flex flex-col h-full justify-between space-y-3 text-sm"
 						on:submit|preventDefault={() => {
+							saveSettings({
+								speakVoice: speakVoice !== '' ? speakVoice : undefined
+							});
 							show = false;
 						}}
 					>
@@ -1551,7 +1672,7 @@
 											bind:value={titleAutoGenerateModel}
 											placeholder="Select a model"
 										>
-											<option value="" selected>Default</option>
+											<option value="" selected>Current Model</option>
 											{#each $models.filter((m) => m.size != null) as model}
 												<option value={model.name} class="bg-gray-100 dark:bg-gray-700"
 													>{model.name +
@@ -1588,7 +1709,31 @@
 								</div>
 							</div>
 
-							<!-- <hr class=" dark:border-gray-700" />
+							<hr class=" dark:border-gray-700" />
+
+							<div class=" space-y-3">
+								<div>
+									<div class=" mb-2.5 text-sm font-medium">Set Default Voice</div>
+									<div class="flex w-full">
+										<div class="flex-1">
+											<select
+												class="w-full rounded py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none"
+												bind:value={speakVoice}
+												placeholder="Select a voice"
+											>
+												<option value="" selected>Default</option>
+												{#each $voices.filter((v) => v.localService === true) as voice}
+													<option value={voice.name} class="bg-gray-100 dark:bg-gray-700"
+														>{voice.name}</option
+													>
+												{/each}
+											</select>
+										</div>
+									</div>
+								</div>
+							</div>
+
+							<!--
 							<div>
 								<div class=" mb-2.5 text-sm font-medium">
 									Gravatar Email <span class=" text-gray-400 text-sm">(optional)</span>
@@ -1866,184 +2011,12 @@
 							{/if}
 						</div>
 					</div>
-				{:else if selectedTab === 'auth'}
-					<form
-						class="flex flex-col h-full justify-between space-y-3 text-sm"
-						on:submit|preventDefault={() => {
-							console.log('auth save');
-							saveSettings({
-								authHeader: authEnabled ? `${authType} ${authContent}` : undefined
-							});
+				{:else if selectedTab === 'account'}
+					<Account
+						saveHandler={() => {
 							show = false;
 						}}
-					>
-						<div class=" space-y-3">
-							<div>
-								<div class=" py-1 flex w-full justify-between">
-									<div class=" self-center text-sm font-medium">Authorization Header</div>
-
-									<button
-										class="p-1 px-3 text-xs flex rounded transition"
-										type="button"
-										on:click={() => {
-											toggleAuthHeader();
-										}}
-									>
-										{#if authEnabled === true}
-											<svg
-												xmlns="http://www.w3.org/2000/svg"
-												viewBox="0 0 24 24"
-												fill="currentColor"
-												class="w-4 h-4"
-											>
-												<path
-													fill-rule="evenodd"
-													d="M12 1.5a5.25 5.25 0 00-5.25 5.25v3a3 3 0 00-3 3v6.75a3 3 0 003 3h10.5a3 3 0 003-3v-6.75a3 3 0 00-3-3v-3c0-2.9-2.35-5.25-5.25-5.25zm3.75 8.25v-3a3.75 3.75 0 10-7.5 0v3h7.5z"
-													clip-rule="evenodd"
-												/>
-											</svg>
-
-											<span class="ml-2 self-center"> On </span>
-										{:else}
-											<svg
-												xmlns="http://www.w3.org/2000/svg"
-												viewBox="0 0 24 24"
-												fill="currentColor"
-												class="w-4 h-4"
-											>
-												<path
-													d="M18 1.5c2.9 0 5.25 2.35 5.25 5.25v3.75a.75.75 0 01-1.5 0V6.75a3.75 3.75 0 10-7.5 0v3a3 3 0 013 3v6.75a3 3 0 01-3 3H3.75a3 3 0 01-3-3v-6.75a3 3 0 013-3h9v-3c0-2.9 2.35-5.25 5.25-5.25z"
-												/>
-											</svg>
-
-											<span class="ml-2 self-center">Off</span>
-										{/if}
-									</button>
-								</div>
-							</div>
-
-							{#if authEnabled}
-								<hr class=" dark:border-gray-700" />
-
-								<div class="mt-2">
-									<div class=" py-1 flex w-full space-x-2">
-										<button
-											class=" py-1 font-semibold flex rounded transition"
-											on:click={() => {
-												authType = authType === 'Basic' ? 'Bearer' : 'Basic';
-											}}
-											type="button"
-										>
-											{#if authType === 'Basic'}
-												<span class="self-center mr-2">Basic</span>
-											{:else if authType === 'Bearer'}
-												<span class="self-center mr-2">Bearer</span>
-											{/if}
-										</button>
-
-										<div class="flex-1">
-											<input
-												class="w-full rounded py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none"
-												placeholder="Enter Authorization Header Content"
-												bind:value={authContent}
-											/>
-										</div>
-									</div>
-									<div class="mt-2 text-xs text-gray-400 dark:text-gray-500">
-										Toggle between <span class=" text-gray-500 dark:text-gray-300 font-medium"
-											>'Basic'</span
-										>
-										and <span class=" text-gray-500 dark:text-gray-300 font-medium">'Bearer'</span> by
-										clicking on the label next to the input.
-									</div>
-								</div>
-
-								<hr class=" dark:border-gray-700" />
-
-								<div>
-									<div class=" mb-2.5 text-sm font-medium">Preview Authorization Header</div>
-									<textarea
-										value={JSON.stringify({
-											Authorization: `${authType} ${authContent}`
-										})}
-										class="w-full rounded p-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none resize-none"
-										rows="2"
-										disabled
-									/>
-								</div>
-							{/if}
-						</div>
-
-						<div class="flex justify-end pt-3 text-sm font-medium">
-							<button
-								class=" px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-gray-100 transition rounded"
-								type="submit"
-							>
-								Save
-							</button>
-						</div>
-					</form>
-				{:else if selectedTab === 'account'}
-					<form
-						class="flex flex-col h-full text-sm"
-						on:submit|preventDefault={() => {
-							updatePasswordHandler();
-						}}
-					>
-						<div class=" mb-2.5 font-medium">Change Password</div>
-
-						<div class=" space-y-1.5">
-							<div class="flex flex-col w-full">
-								<div class=" mb-1 text-xs text-gray-500">Current Password</div>
-
-								<div class="flex-1">
-									<input
-										class="w-full rounded py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none"
-										type="password"
-										bind:value={currentPassword}
-										autocomplete="current-password"
-										required
-									/>
-								</div>
-							</div>
-
-							<div class="flex flex-col w-full">
-								<div class=" mb-1 text-xs text-gray-500">New Password</div>
-
-								<div class="flex-1">
-									<input
-										class="w-full rounded py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none"
-										type="password"
-										bind:value={newPassword}
-										autocomplete="new-password"
-										required
-									/>
-								</div>
-							</div>
-
-							<div class="flex flex-col w-full">
-								<div class=" mb-1 text-xs text-gray-500">Confirm Password</div>
-
-								<div class="flex-1">
-									<input
-										class="w-full rounded py-2 px-4 text-sm dark:text-gray-300 dark:bg-gray-800 outline-none"
-										type="password"
-										bind:value={newPasswordConfirm}
-										autocomplete="off"
-										required
-									/>
-								</div>
-							</div>
-						</div>
-
-						<div class="mt-3 flex justify-end">
-							<button
-								class=" px-4 py-2 text-xs bg-gray-800 hover:bg-gray-900 dark:bg-gray-700 dark:hover:bg-gray-800 text-gray-100 transition rounded-md font-medium"
-							>
-								Update password
-							</button>
-						</div>
-					</form>
+					/>
 				{:else if selectedTab === 'about'}
 					<div class="flex flex-col h-full justify-between space-y-3 text-sm mb-6">
 						<div class=" space-y-3">

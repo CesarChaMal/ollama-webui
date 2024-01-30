@@ -19,6 +19,12 @@ from langchain_community.document_loaders import (
     PyPDFLoader,
     CSVLoader,
     Docx2txtLoader,
+    UnstructuredEPubLoader,
+    UnstructuredWordDocumentLoader,
+    UnstructuredMarkdownLoader,
+    UnstructuredXMLLoader,
+    UnstructuredRSTLoader,
+    UnstructuredExcelLoader,
 )
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
@@ -31,7 +37,7 @@ from typing import Optional
 import uuid
 import time
 
-from utils.misc import calculate_sha256
+from utils.misc import calculate_sha256, calculate_sha256_string
 from utils.utils import get_current_user
 from config import UPLOAD_DIR, EMBED_MODEL, CHROMA_CLIENT, CHUNK_SIZE, CHUNK_OVERLAP
 from constants import ERROR_MESSAGES
@@ -118,14 +124,104 @@ def store_web(form_data: StoreWebForm, user=Depends(get_current_user)):
     try:
         loader = WebBaseLoader(form_data.url)
         data = loader.load()
-        store_data_in_vector_db(data, form_data.collection_name)
-        return {"status": True, "collection_name": form_data.collection_name}
+
+        collection_name = form_data.collection_name
+        if collection_name == "":
+            collection_name = calculate_sha256_string(form_data.url)[:63]
+
+        store_data_in_vector_db(data, collection_name)
+        return {
+            "status": True,
+            "collection_name": collection_name,
+            "filename": form_data.url,
+        }
     except Exception as e:
         print(e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=ERROR_MESSAGES.DEFAULT(e),
         )
+
+
+def get_loader(file, file_path):
+    file_ext = file.filename.split(".")[-1].lower()
+    known_type = True
+
+    known_source_ext = [
+        "go",
+        "py",
+        "java",
+        "sh",
+        "bat",
+        "ps1",
+        "cmd",
+        "js",
+        "ts",
+        "css",
+        "cpp",
+        "hpp",
+        "h",
+        "c",
+        "cs",
+        "sql",
+        "log",
+        "ini",
+        "pl",
+        "pm",
+        "r",
+        "dart",
+        "dockerfile",
+        "env",
+        "php",
+        "hs",
+        "hsc",
+        "lua",
+        "nginxconf",
+        "conf",
+        "m",
+        "mm",
+        "plsql",
+        "perl",
+        "rb",
+        "rs",
+        "db2",
+        "scala",
+        "bash",
+        "swift",
+        "vue",
+        "svelte",
+    ]
+
+    if file_ext == "pdf":
+        loader = PyPDFLoader(file_path)
+    elif file_ext == "csv":
+        loader = CSVLoader(file_path)
+    elif file_ext == "rst":
+        loader = UnstructuredRSTLoader(file_path, mode="elements")
+    elif file_ext == "xml":
+        loader = UnstructuredXMLLoader(file_path)
+    elif file_ext == "md":
+        loader = UnstructuredMarkdownLoader(file_path)
+    elif file.content_type == "application/epub+zip":
+        loader = UnstructuredEPubLoader(file_path)
+    elif (
+        file.content_type
+        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        or file_ext in ["doc", "docx"]
+    ):
+        loader = Docx2txtLoader(file_path)
+    elif file.content_type in [
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ] or file_ext in ["xls", "xlsx"]:
+        loader = UnstructuredExcelLoader(file_path)
+    elif file_ext in known_source_ext or file.content_type.find("text/") >= 0:
+        loader = TextLoader(file_path)
+    else:
+        loader = TextLoader(file_path)
+        known_type = False
+
+    return loader, known_type
 
 
 @app.post("/doc")
@@ -136,17 +232,7 @@ def store_doc(
 ):
     # "https://www.gutenberg.org/files/1727/1727-h/1727-h.htm"
 
-    if file.content_type not in [
-        "application/pdf",
-        "text/plain",
-        "text/csv",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=ERROR_MESSAGES.FILE_NOT_SUPPORTED,
-        )
-
+    print(file.content_type)
     try:
         filename = file.filename
         file_path = f"{UPLOAD_DIR}/{filename}"
@@ -160,23 +246,17 @@ def store_doc(
             collection_name = calculate_sha256(f)[:63]
         f.close()
 
-        if file.content_type == "application/pdf":
-            loader = PyPDFLoader(file_path)
-        elif (
-            file.content_type
-            == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        ):
-            loader = Docx2txtLoader(file_path)
-        elif file.content_type == "text/plain":
-            loader = TextLoader(file_path)
-        elif file.content_type == "text/csv":
-            loader = CSVLoader(file_path)
-
+        loader, known_type = get_loader(file, file_path)
         data = loader.load()
         result = store_data_in_vector_db(data, collection_name)
 
         if result:
-            return {"status": True, "collection_name": collection_name}
+            return {
+                "status": True,
+                "collection_name": collection_name,
+                "filename": filename,
+                "known_type": known_type,
+            }
         else:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -184,10 +264,16 @@ def store_doc(
             )
     except Exception as e:
         print(e)
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=ERROR_MESSAGES.DEFAULT(e),
-        )
+        if "No pandoc was found" in str(e):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ERROR_MESSAGES.PANDOC_NOT_INSTALLED,
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=ERROR_MESSAGES.DEFAULT(e),
+            )
 
 
 @app.get("/reset/db")

@@ -6,7 +6,11 @@
 
 	import Prompts from './MessageInput/PromptCommands.svelte';
 	import Suggestions from './MessageInput/Suggestions.svelte';
-	import { uploadDocToVectorDB } from '$lib/apis/rag';
+	import { uploadDocToVectorDB, uploadWebToVectorDB } from '$lib/apis/rag';
+	import AddFilesPlaceholder from '../AddFilesPlaceholder.svelte';
+	import { SUPPORTED_FILE_TYPE, SUPPORTED_FILE_EXTENSIONS } from '$lib/constants';
+	import Documents from './MessageInput/Documents.svelte';
+	import Models from './MessageInput/Models.svelte';
 
 	export let submitPrompt: Function;
 	export let stopResponse: Function;
@@ -15,10 +19,16 @@
 	export let autoScroll = true;
 
 	let filesInputElement;
+
 	let promptsElement;
+	let documentsElement;
+	let modelsElement;
 
 	let inputFiles;
 	let dragged = false;
+
+	let user = null;
+	let chatInputPlaceholder = '';
 
 	export let files = [];
 
@@ -30,6 +40,15 @@
 	export let messages = [];
 
 	let speechRecognition;
+
+	$: if (prompt) {
+		const chatInput = document.getElementById('chat-textarea');
+
+		if (chatInput) {
+			chatInput.style.height = '';
+			chatInput.style.height = Math.min(chatInput.scrollHeight, 200) + 'px';
+		}
+	}
 
 	const speechRecognitionHandler = () => {
 		// Check if SpeechRecognition is supported
@@ -75,7 +94,7 @@
 					console.log('recognition ended');
 					speechRecognitionListening = false;
 					if (prompt !== '' && $settings?.speechAutoSend === true) {
-						submitPrompt(prompt);
+						submitPrompt(prompt, user);
 					}
 				};
 
@@ -102,25 +121,62 @@
 			error: ''
 		};
 
-		files = [...files, doc];
-		const res = await uploadDocToVectorDB(localStorage.token, '', file);
+		try {
+			files = [...files, doc];
+			const res = await uploadDocToVectorDB(localStorage.token, '', file);
 
-		if (res) {
-			doc.upload_status = true;
-			doc.collection_name = res.collection_name;
-			files = files;
+			if (res) {
+				doc.upload_status = true;
+				doc.collection_name = res.collection_name;
+				files = files;
+			}
+		} catch (e) {
+			// Remove the failed doc from the files array
+			files = files.filter((f) => f.name !== file.name);
+			toast.error(e);
+		}
+	};
+
+	const uploadWeb = async (url) => {
+		console.log(url);
+
+		const doc = {
+			type: 'doc',
+			name: url,
+			collection_name: '',
+			upload_status: false,
+			error: ''
+		};
+
+		try {
+			files = [...files, doc];
+			const res = await uploadWebToVectorDB(localStorage.token, '', url);
+
+			if (res) {
+				doc.upload_status = true;
+				doc.collection_name = res.collection_name;
+				files = files;
+			}
+		} catch (e) {
+			// Remove the failed doc from the files array
+			files = files.filter((f) => f.name !== url);
+			toast.error(e);
 		}
 	};
 
 	onMount(() => {
 		const dropZone = document.querySelector('body');
 
-		dropZone?.addEventListener('dragover', (e) => {
+		const onDragOver = (e) => {
 			e.preventDefault();
 			dragged = true;
-		});
+		};
 
-		dropZone.addEventListener('drop', async (e) => {
+		const onDragLeave = () => {
+			dragged = false;
+		};
+
+		const onDrop = async (e) => {
 			e.preventDefault();
 			console.log(e);
 
@@ -141,19 +197,19 @@
 
 				if (inputFiles && inputFiles.length > 0) {
 					const file = inputFiles[0];
+					console.log(file, file.name.split('.').at(-1));
 					if (['image/gif', 'image/jpeg', 'image/png'].includes(file['type'])) {
 						reader.readAsDataURL(file);
 					} else if (
-						[
-							'application/pdf',
-							'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-							'text/plain',
-							'text/csv'
-						].includes(file['type'])
+						SUPPORTED_FILE_TYPE.includes(file['type']) ||
+						SUPPORTED_FILE_EXTENSIONS.includes(file.name.split('.').at(-1))
 					) {
 						uploadDoc(file);
 					} else {
-						toast.error(`Unsupported File Type '${file['type']}'.`);
+						toast.error(
+							`Unknown File Type '${file['type']}', but accepting and treating as plain text`
+						);
+						uploadDoc(file);
 					}
 				} else {
 					toast.error(`File not found.`);
@@ -161,11 +217,17 @@
 			}
 
 			dragged = false;
-		});
+		};
 
-		dropZone?.addEventListener('dragleave', () => {
-			dragged = false;
-		});
+		dropZone?.addEventListener('dragover', onDragOver);
+		dropZone?.addEventListener('drop', onDrop);
+		dropZone?.addEventListener('dragleave', onDragLeave);
+
+		return () => {
+			dropZone?.removeEventListener('dragover', onDragOver);
+			dropZone?.removeEventListener('drop', onDrop);
+			dropZone?.removeEventListener('dragleave', onDragLeave);
+		};
 	});
 </script>
 
@@ -179,12 +241,7 @@
 		<div class="absolute rounded-xl w-full h-full backdrop-blur bg-gray-800/40 flex justify-center">
 			<div class="m-auto pt-64 flex flex-col justify-center">
 				<div class="max-w-md">
-					<div class="  text-center text-6xl mb-3">🗂️</div>
-					<div class="text-center dark:text-white text-2xl font-semibold z-50">Add Files</div>
-
-					<div class=" mt-2 text-center text-sm dark:text-gray-200 w-full">
-						Drop any files/images here to add to the conversation
-					</div>
+					<AddFilesPlaceholder />
 				</div>
 			</div>
 		</div>
@@ -224,6 +281,34 @@
 			<div class="w-full">
 				{#if prompt.charAt(0) === '/'}
 					<Prompts bind:this={promptsElement} bind:prompt />
+				{:else if prompt.charAt(0) === '#'}
+					<Documents
+						bind:this={documentsElement}
+						bind:prompt
+						on:url={(e) => {
+							console.log(e);
+							uploadWeb(e.detail);
+						}}
+						on:select={(e) => {
+							console.log(e);
+							files = [
+								...files,
+								{
+									type: 'doc',
+									...e.detail,
+									upload_status: true
+								}
+							];
+						}}
+					/>
+				{:else if prompt.charAt(0) === '@'}
+					<Models
+						bind:this={modelsElement}
+						bind:prompt
+						bind:user
+						bind:chatInputPlaceholder
+						{messages}
+					/>
 				{:else if messages.length == 0 && suggestionPrompts.length !== 0}
 					<Suggestions {suggestionPrompts} {submitPrompt} />
 				{/if}
@@ -257,18 +342,17 @@
 							if (['image/gif', 'image/jpeg', 'image/png'].includes(file['type'])) {
 								reader.readAsDataURL(file);
 							} else if (
-								[
-									'application/pdf',
-									'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-									'text/plain',
-									'text/csv'
-								].includes(file['type'])
+								SUPPORTED_FILE_TYPE.includes(file['type']) ||
+								SUPPORTED_FILE_EXTENSIONS.includes(file.name.split('.').at(-1))
 							) {
 								uploadDoc(file);
 								filesInputElement.value = '';
 							} else {
-								toast.error(`Unsupported File Type '${file['type']}'.`);
-								inputFiles = null;
+								toast.error(
+									`Unknown File Type '${file['type']}', but accepting and treating as plain text`
+								);
+								uploadDoc(file);
+								filesInputElement.value = '';
 							}
 						} else {
 							toast.error(`File not found.`);
@@ -278,7 +362,7 @@
 				<form
 					class=" flex flex-col relative w-full rounded-xl border dark:border-gray-600 bg-white dark:bg-gray-800 dark:text-gray-100"
 					on:submit|preventDefault={() => {
-						submitPrompt(prompt);
+						submitPrompt(prompt, user);
 					}}
 				>
 					{#if files.length > 0}
@@ -420,17 +504,35 @@
 							class=" dark:bg-gray-800 dark:text-gray-100 outline-none w-full py-3 px-2 {fileUploadEnabled
 								? ''
 								: ' pl-4'} rounded-xl resize-none h-[48px]"
-							placeholder={speechRecognitionListening ? 'Listening...' : 'Send a message'}
+							placeholder={chatInputPlaceholder !== ''
+								? chatInputPlaceholder
+								: speechRecognitionListening
+								? 'Listening...'
+								: 'Send a message'}
 							bind:value={prompt}
 							on:keypress={(e) => {
 								if (e.keyCode == 13 && !e.shiftKey) {
 									e.preventDefault();
 								}
 								if (prompt !== '' && e.keyCode == 13 && !e.shiftKey) {
-									submitPrompt(prompt);
+									submitPrompt(prompt, user);
 								}
 							}}
 							on:keydown={async (e) => {
+								const isCtrlPressed = e.ctrlKey || e.metaKey; // metaKey is for Cmd key on Mac
+
+								// Check if Ctrl + R is pressed
+								if (prompt === '' && isCtrlPressed && e.key.toLowerCase() === 'r') {
+									e.preventDefault();
+									console.log('regenerate');
+
+									const regenerateButton = [
+										...document.getElementsByClassName('regenerate-response-button')
+									]?.at(-1);
+
+									regenerateButton?.click();
+								}
+
 								if (prompt === '' && e.key == 'ArrowUp') {
 									e.preventDefault();
 
@@ -448,8 +550,10 @@
 									editButton?.click();
 								}
 
-								if (prompt.charAt(0) === '/' && e.key === 'ArrowUp') {
-									promptsElement.selectUp();
+								if (['/', '#', '@'].includes(prompt.charAt(0)) && e.key === 'ArrowUp') {
+									e.preventDefault();
+
+									(promptsElement || documentsElement || modelsElement).selectUp();
 
 									const commandOptionButton = [
 										...document.getElementsByClassName('selected-command-option-button')
@@ -457,8 +561,10 @@
 									commandOptionButton.scrollIntoView({ block: 'center' });
 								}
 
-								if (prompt.charAt(0) === '/' && e.key === 'ArrowDown') {
-									promptsElement.selectDown();
+								if (['/', '#', '@'].includes(prompt.charAt(0)) && e.key === 'ArrowDown') {
+									e.preventDefault();
+
+									(promptsElement || documentsElement || modelsElement).selectDown();
 
 									const commandOptionButton = [
 										...document.getElementsByClassName('selected-command-option-button')
@@ -466,7 +572,7 @@
 									commandOptionButton.scrollIntoView({ block: 'center' });
 								}
 
-								if (prompt.charAt(0) === '/' && e.key === 'Enter') {
+								if (['/', '#', '@'].includes(prompt.charAt(0)) && e.key === 'Enter') {
 									e.preventDefault();
 
 									const commandOptionButton = [
@@ -476,7 +582,7 @@
 									commandOptionButton?.click();
 								}
 
-								if (prompt.charAt(0) === '/' && e.key === 'Tab') {
+								if (['/', '#', '@'].includes(prompt.charAt(0)) && e.key === 'Tab') {
 									e.preventDefault();
 
 									const commandOptionButton = [
@@ -507,6 +613,7 @@
 							on:input={(e) => {
 								e.target.style.height = '';
 								e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+								user = null;
 							}}
 							on:paste={(e) => {
 								const clipboardData = e.clipboardData || window.clipboardData;

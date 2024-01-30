@@ -8,10 +8,12 @@
 	let mounted = false;
 
 	const sizeToWidth = (size) => {
-		if (size === 'sm') {
+		if (size === 'xs') {
+			return 'w-[16rem]';
+		} else if (size === 'sm') {
 			return 'w-[30rem]';
 		} else {
-			return 'w-[40rem]';
+			return 'w-[42rem]';
 		}
 	};
 

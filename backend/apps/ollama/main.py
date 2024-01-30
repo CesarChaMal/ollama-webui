@@ -5,6 +5,7 @@ from fastapi.concurrency import run_in_threadpool
 
 import requests
 import json
+import uuid
 from pydantic import BaseModel
 
 from apps.web.models.users import Users
@@ -24,6 +25,9 @@ app.add_middleware(
 app.state.OLLAMA_API_BASE_URL = OLLAMA_API_BASE_URL
 
 # TARGET_SERVER_URL = OLLAMA_API_BASE_URL
+
+
+REQUEST_POOL = []
 
 
 @app.get("/url")
@@ -49,6 +53,16 @@ async def update_ollama_api_url(
         raise HTTPException(status_code=401, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
 
 
+@app.get("/cancel/{request_id}")
+async def cancel_ollama_request(request_id: str, user=Depends(get_current_user)):
+    if user:
+        if request_id in REQUEST_POOL:
+            REQUEST_POOL.remove(request_id)
+        return True
+    else:
+        raise HTTPException(status_code=401, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
+
+
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def proxy(path: str, request: Request, user=Depends(get_current_user)):
     target_url = f"{app.state.OLLAMA_API_BASE_URL}/{path}"
@@ -65,16 +79,36 @@ async def proxy(path: str, request: Request, user=Depends(get_current_user)):
     else:
         raise HTTPException(status_code=401, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
 
-    headers.pop("Host", None)
-    headers.pop("Authorization", None)
-    headers.pop("Origin", None)
-    headers.pop("Referer", None)
+    headers.pop("host", None)
+    headers.pop("authorization", None)
+    headers.pop("origin", None)
+    headers.pop("referer", None)
 
     r = None
 
     def get_request():
         nonlocal r
+
+        request_id = str(uuid.uuid4())
         try:
+            REQUEST_POOL.append(request_id)
+
+            def stream_content():
+                try:
+                    if path in ["chat"]:
+                        yield json.dumps({"id": request_id, "done": False}) + "\n"
+
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if request_id in REQUEST_POOL:
+                            yield chunk
+                        else:
+                            print("User: canceled request")
+                            break
+                finally:
+                    if hasattr(r, "close"):
+                        r.close()
+                        REQUEST_POOL.remove(request_id)
+
             r = requests.request(
                 method=request.method,
                 url=target_url,
@@ -85,8 +119,10 @@ async def proxy(path: str, request: Request, user=Depends(get_current_user)):
 
             r.raise_for_status()
 
+            # r.close()
+
             return StreamingResponse(
-                r.iter_content(chunk_size=8192),
+                stream_content(),
                 status_code=r.status_code,
                 headers=dict(r.headers),
             )
