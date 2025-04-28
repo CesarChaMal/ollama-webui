@@ -269,7 +269,7 @@ update_env_file() {
 
     echo "✅ Updated .env:"
     echo " - OLLAMA_HOST=$OLLAMA_HOST"
-    echo " - OLLAMA_API_BASE_URL=OLLAMA_API"
+    echo " - OLLAMA_API_BASE_URL=$OLLAMA_API"
 }
 
 check_logs() {
@@ -343,7 +343,7 @@ install_python_packages
 #setup_webui
 run_ollama_setup_py
 start_backend_server
-run_webui_setup_py
 update_env_file
 check_logs
 final_message
+run_webui_setup_py
