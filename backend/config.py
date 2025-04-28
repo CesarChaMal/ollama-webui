@@ -39,9 +39,13 @@ Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 # OLLAMA_API_BASE_URL
 ####################################
 
-OLLAMA_API_BASE_URL = os.environ.get(
-    "OLLAMA_API_BASE_URL", "http://localhost:11434/api"
-)
+OLLAMA_API_BASE_URL = os.environ.get("OLLAMA_API_BASE_URL", "http://localhost:11434/api")
+
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+OLLAMA_WEBAPI_PREFIX = os.environ.get("OLLAMA_WEBAPI_PREFIX", "/ollama/api")
+
+
 
 if ENV == "prod":
     if OLLAMA_API_BASE_URL == "/ollama/api":

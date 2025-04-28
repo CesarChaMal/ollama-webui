@@ -87,4 +87,3 @@ build_dir = os.path.join(base_dir, 'build')
 
 # Use the dynamically constructed path in app.mount
 app.mount("/", SPAStaticFiles(directory=build_dir, html=True), name="spa-static-files")
-
